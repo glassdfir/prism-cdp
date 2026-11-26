@@ -122,7 +122,7 @@ Each tab also gets the floating **Prism** control (bottom right) for loading rul
 ## Files
 
 - `prism_cdp.py` is the controller: launching and attaching, the pipe and WebSocket transports, tab and frame tracking, and live rule reloads.
-- `examples/case01.prism.json` holds the rules from the screenshot, for [Case 01](https://jon.glass/cases/arclight/): `python3 prism_cdp.py --rules examples/case01.prism.json https://jon.glass/cases/arclight/`. It's a Prism rule file, so it also opens in the Prism web app (**Sets → Load rules from a file…**) if you want to edit it there.
+- `examples/case01.prism.json` and `examples/case01.csv` hold the rules from the screenshot, for [Case 01](https://jon.glass/cases/arclight/), in both formats: `python3 prism_cdp.py --rules examples/case01.prism.json https://jon.glass/cases/arclight/`. The `.prism.json` is a Prism rule file, so it also opens in the Prism web app (**Sets → Load rules from a file…**) if you want to edit it there. The CSV shows the same rules as a spreadsheet, with severity and ticket as their own columns.
 - `starter.csv` holds starter DFIR signatures (tooling, URLs, IPs, hashes, paths, registry keys and more). It's also offered by the **Starter rules** button in each tab, and it's a working example of the CSV format.
 - `engine.js` is the highlighter injected into every page, adapted from Prism's.
 
