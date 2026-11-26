@@ -2,7 +2,7 @@
 
 Prism highlighting on every page you visit in Microsoft Edge or Google Chrome, driven from a small Python controller over the Chrome DevTools Protocol. No extension needed.
 
-Same engine as [Prism](https://jon.glass/prism/): regex rules color matches as pages load and change, and hovering a hit shows its rule, capture groups and the text around it. Your signatures come from a CSV file, and any extra columns (severity, MITRE ID, ticket…) show on the hover card.
+Same engine as [Prism](https://jon.glass/prism/): regex rules color matches as pages load and change, and hovering a hit shows its rule, its notes and capture groups. Your signatures come from a CSV file, and any extra columns (severity, MITRE ID, ticket…) show on the hover card.
 
 **Good for:** Seeing your indicators and patterns in the consoles you already work in, like ticket queues, EDR and SIEM pages and web chat, without copying text out.
 
@@ -89,7 +89,7 @@ Type these at the `prism_cdp.py` prompt:
 | `open <url>` | Open a new tab |
 | `quit` (or Ctrl+C, or Ctrl+Break on Windows) | Remove Prism from every page and exit. Closes the browser if Prism launched it, unless `--keep-open`. |
 
-Each tab also gets the floating **Prism** control (bottom right) for loading rules into just that tab, turning it off, or removing it until the tab reloads. `--no-ui` hides that control. Other options: `--off` (start with highlighting off), `--context N` (hover-card context length), `--browser PATH` or `PRISM_BROWSER` (another Chromium browser), `--browser-arg ARG`, `--profile DIR`, `-v`.
+Each tab also gets the floating **Prism** control (bottom right) for loading rules into just that tab, turning it off, or removing it until the tab reloads. `--no-ui` hides that control. Other options: `--off` (start with highlighting off), `--context [N]` (also show the text around each hit on the hover card, N characters each side, 100 if you leave N out; it's off by default because on a live page that text is already on screen), `--browser PATH` or `PRISM_BROWSER` (another Chromium browser), `--browser-arg ARG`, `--profile DIR`, `-v`.
 
 ## How it stays out of the way
 

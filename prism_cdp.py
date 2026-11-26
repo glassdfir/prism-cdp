@@ -625,7 +625,9 @@ async def main():
     ap.add_argument("--headless", action="store_true", help="run the launched browser headless (testing)")
     ap.add_argument("--no-ui", action="store_true", help="no floating Prism control in pages")
     ap.add_argument("--off", action="store_true", help="start with highlighting off")
-    ap.add_argument("--context", type=int, default=100, help="characters of context in the hover card (default 100)")
+    ap.add_argument("--context", type=int, nargs="?", const=100, default=0, metavar="N",
+                    help="show the text around each hit on the hover card: N characters each side (bare --context: 100). "
+                         "Off by default, since on a live page that text is already on screen")
     ap.add_argument("--verbose", "-v", action="store_true")
     args = ap.parse_args()
     if args.starter:

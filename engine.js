@@ -9,7 +9,7 @@
  * - Makes no network requests and saves nothing. Rules come from the controller and live in memory only.
  *
  * globalThis.__PRISM_BOOT__ (set by the controller just before this file):
- *   { rules, starter, enabled, ui, contextChars }  rules and starter are .prism.json text the controller built from files
+ *   { rules, starter, enabled, ui, contextChars (0 = no context on the hover card) }  rules and starter are .prism.json text the controller built from files
  * Source: https://jon.glass/prism/ · MIT © 2026 Jon Glass
  */
 // The run's promise, so the controller can wait for rules to be checked and running before it reports back
@@ -17,7 +17,9 @@ globalThis.__PRISM_READY__ = (async () => {
   'use strict';
 
   const BOOT = globalThis.__PRISM_BOOT__ || {};
-  const CONTEXT_CHARS = BOOT.contextChars || 100;
+  // Characters of surrounding text shown on the hover card. Off (0) unless the controller's --context asks for it:
+  // on a live page the text around a hit is already on screen.
+  const CONTEXT_CHARS = Math.max(0, Number(BOOT.contextChars) || 0);
   // Web pages and local files only: leave edge://, about:, devtools and extension pages alone
   if (!/^(https?|file):$/.test(location.protocol)) return;
   let TOP = true; try { TOP = window.top === window; } catch (e) { TOP = false; }
@@ -209,7 +211,7 @@ globalThis.__PRISM_READY__ = (async () => {
     const byId = new Map(rules.map((r) => [r.id, r]));
     list = list.slice().sort((x, y) => byId.get(y.rid).prio - byId.get(x.rid).prio).slice(0, 4);
     card.innerHTML = list.map((h, i) => {
-      const r = byId.get(h.rid), cx = context(node, h), [R, G, B] = rgb(r.color);
+      const r = byId.get(h.rid), cx = ctxChars > 0 ? context(node, h) : null, [R, G, B] = rgb(r.color);
       let groups = '';
       if (h.g) {
         const rows = [], named = h.g.n ? Object.entries(h.g.n).filter(([, v]) => v != null) : [], vals = named.map(([, v]) => v);
@@ -221,8 +223,8 @@ globalThis.__PRISM_READY__ = (async () => {
         <div class="head"><span class="chip" data-bg="${r.color}"></span><b>${esc(r.name)}</b></div>
         ${r.desc ? `<div class="desc">${esc(r.desc)}</div>` : ''}
         <div class="val mono">${esc(node.data.slice(h.s, h.e))}</div>${groups}
-        <div class="ctx mono">${esc(cx.before)}<mark data-bg="rgba(${R},${G},${B},.4)">${esc(cx.match)}</mark>${esc(cx.after)}</div>
-        <div class="act"><button data-copy="val">Copy match</button><button data-copy="ctx">Copy context</button>${i === 0 ? '<span class="brand">Prism</span>' : ''}</div>
+        ${cx ? `<div class="ctx mono">${esc(cx.before)}<mark data-bg="rgba(${R},${G},${B},.4)">${esc(cx.match)}</mark>${esc(cx.after)}</div>` : ''}
+        <div class="act"><button data-copy="val">Copy match</button>${cx ? '<button data-copy="ctx">Copy context</button>' : ''}${i === 0 ? '<span class="brand">Prism</span>' : ''}</div>
       </div>`;
     }).join('');
     card.querySelectorAll('[data-bg]').forEach((e) => { e.style.background = e.dataset.bg; }); // CSSOM: allowed under a strict CSP
@@ -240,8 +242,8 @@ globalThis.__PRISM_READY__ = (async () => {
   shadow.addEventListener('click', async (e) => {
     const b = e.target.closest('button'); if (!b || !card._data) return;
     const { node, list } = card._data, h = list[+b.closest('.hit').dataset.i];
-    const cx = context(node, h);
-    const text = b.dataset.copy === 'val' ? node.data.slice(h.s, h.e) : cx.before.replace(/^…/, '') + cx.match + cx.after.replace(/…$/, '');
+    const cx = b.dataset.copy === 'ctx' ? context(node, h) : null;
+    const text = !cx ? node.data.slice(h.s, h.e) : cx.before.replace(/^…/, '') + cx.match + cx.after.replace(/…$/, '');
     try { await navigator.clipboard.writeText(text); b.textContent = 'Copied'; } catch (err) { b.textContent = 'Copy blocked'; }
   });
   host.addEventListener('mouseenter', () => { overCard = true; clearTimeout(hideT); });
