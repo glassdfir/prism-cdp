@@ -12,7 +12,8 @@
  *   { rules, starter, enabled, ui, contextChars }  rules and starter are .prism.json text the controller built from files
  * Source: https://jon.glass/prism/ · MIT © 2026 Jon Glass
  */
-(async () => {
+// The run's promise, so the controller can wait for rules to be checked and running before it reports back
+globalThis.__PRISM_READY__ = (async () => {
   'use strict';
 
   const BOOT = globalThis.__PRISM_BOOT__ || {};
@@ -277,8 +278,10 @@
     });
   }
   document.addEventListener('mousemove', onMove, { passive: true });
-  addEventListener('scroll', () => { if (shown && !overCard) hide(); }, { capture: true, passive: true });
-  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && shown) hide(); });
+  const onScroll = () => { if (shown && !overCard) hide(); };
+  const onKey = (e) => { if (e.key === 'Escape' && shown) hide(); };
+  addEventListener('scroll', onScroll, { capture: true, passive: true });
+  document.addEventListener('keydown', onKey);
 
 
   // ---------- Rules: links, JSON, and the runaway-pattern check ----------
@@ -314,13 +317,15 @@
     try { new RegExp(r.pattern, r.flags); } catch (e) { r.paused = 'invalid: ' + e.message; return Promise.resolve(); }
     if (workerBlocked) { if (risky(r.pattern)) r.paused = 'paused: nested repetition can stall, and it could not be tested here'; return Promise.resolve(); }
     return new Promise((resolve) => {
-      let w;
-      try { w = new Worker(URL.createObjectURL(new Blob([CHECK_SRC], { type: 'text/javascript' }))); }
-      catch (e) { workerBlocked = true; console.warn('[Prism] Background workers are blocked here, so patterns get a simpler check. Patterns with nested repetition are paused.'); return check(r).then(resolve); }
-      const done = (slow) => { clearTimeout(t); w.terminate(); if (slow) r.paused = 'paused: stalls on some text'; resolve(); };
+      let w, url;
+      // Revoked once the worker has finished, so blobs don't pile up for the life of the tab
+      const free = () => { try { w && w.terminate(); } catch (e) {} if (url) { URL.revokeObjectURL(url); url = null; } };
+      try { url = URL.createObjectURL(new Blob([CHECK_SRC], { type: 'text/javascript' })); w = new Worker(url); }
+      catch (e) { free(); workerBlocked = true; console.warn('[Prism] Background workers are blocked here, so patterns get a simpler check. Patterns with nested repetition are paused.'); return check(r).then(resolve); }
+      const done = (slow) => { clearTimeout(t); free(); if (slow) r.paused = 'paused: stalls on some text'; resolve(); };
       const t = setTimeout(() => done(true), 1500);
       w.onmessage = () => done(false);
-      w.onerror = (e) => { e.preventDefault(); clearTimeout(t); w.terminate(); workerBlocked = true; console.warn('[Prism] Background workers are blocked here, so patterns get a simpler check. Patterns with nested repetition are paused.'); check(r).then(resolve); };
+      w.onerror = (e) => { e.preventDefault(); clearTimeout(t); free(); workerBlocked = true; console.warn('[Prism] Background workers are blocked here, so patterns get a simpler check. Patterns with nested repetition are paused.'); check(r).then(resolve); };
       w.postMessage({ p: r.pattern, f: r.flags });
     });
   }
@@ -389,6 +394,8 @@
       for (const r of rules) CSS.highlights.delete('prism-' + r.id);
       document.adoptedStyleSheets = document.adoptedStyleSheets.filter((s) => s !== sheet);
       document.removeEventListener('mousemove', onMove);
+      removeEventListener('scroll', onScroll, { capture: true });
+      document.removeEventListener('keydown', onKey);
       host.remove(); pill.remove();
       delete window.prismHL;
       console.info('[Prism] Removed.');

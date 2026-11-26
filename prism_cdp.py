@@ -218,7 +218,8 @@ class WebSocketTransport:
         self._r, self._w = await asyncio.open_connection(u.hostname, u.port or 80)
         key = base64.b64encode(os.urandom(16)).decode()
         # No Origin header: Chromium only checks --remote-allow-origins when one is sent
-        self._w.write((f"GET {u.path} HTTP/1.1\r\nHost: {u.hostname}:{u.port}\r\nUpgrade: websocket\r\n"
+        path = (u.path or "/") + (f"?{u.query}" if u.query else "")  # a bare ws://host:port has no path
+        self._w.write((f"GET {path} HTTP/1.1\r\nHost: {u.hostname}:{u.port}\r\nUpgrade: websocket\r\n"
                        f"Connection: Upgrade\r\nSec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n").encode())
         head = await self._r.readuntil(b"\r\n\r\n")
         if b" 101 " not in head.split(b"\r\n", 1)[0]:
@@ -288,7 +289,7 @@ class CDP:
         self._id = 0
         self._pending = {}
         self._handlers = defaultdict(list)
-        self.closed = asyncio.get_event_loop().create_future()
+        self.closed = asyncio.get_running_loop().create_future()
         self.t.on_close = lambda: self.closed.done() or self.closed.set_result(True)
 
     def on(self, method, fn):
@@ -460,12 +461,12 @@ class Prism:
                     pass
 
     # live changes ---------------------------------------------------------
-    async def each_context(self, expr):
+    async def each_context(self, expr, timeout=10):
         out = []
         for (sid, cid) in list(self.contexts):
             try:
                 r = await self.cdp.send("Runtime.evaluate", {"expression": expr, "contextId": cid, "awaitPromise": True,
-                                                             "returnByValue": True}, sid, timeout=10)
+                                                             "returnByValue": True}, sid, timeout=timeout)
                 out.append((sid, cid, r.get("result", {}).get("value")))
             except (CDPError, asyncio.TimeoutError):
                 pass
@@ -485,10 +486,12 @@ class Prism:
 
     async def push_rules(self):
         await self.reregister()
-        # Re-run the engine with the new rules wherever Prism is running (it replaces its previous run).
-        # Frames where someone pressed ✕ stay clear until they reload.
-        expr = f"(() => {{ if (!globalThis.prismHL) return false; {self.payload()}; return true; }})()"
-        n = sum(1 for *_, v in await self.each_context(expr) if v)
+        # Re-run the engine with the new rules wherever Prism is running (it replaces its previous run), and wait
+        # for the run to finish, so "reloaded" means the rules are checked and running. Each pattern's stall test
+        # can take up to 1.5 s, hence the longer timeout. Frames where someone pressed ✕ stay clear until they reload.
+        expr = (f"(async () => {{ if (!globalThis.prismHL) return false; {self.payload()}; "
+                f"await globalThis.__PRISM_READY__; return true; }})()")
+        n = sum(1 for *_, v in await self.each_context(expr, timeout=60) if v)
         log(f"rules reloaded in {n} frame{'s' if n != 1 else ''}")
 
     async def set_enabled(self, on):
@@ -557,7 +560,10 @@ HELP = """commands:
 async def ws_url(target, quiet=False):
     """Browser WebSocket URL for a port, an http://host:port, or a ws:// URL. None if nothing answers."""
     if target.startswith("ws"):
-        return target
+        u = urlparse(target)
+        if u.path not in ("", "/"):
+            return target
+        target = f"http://{u.hostname}:{u.port or 80}"  # a bare ws://host:port: ask that port for the browser's URL
     base = target if "://" in target else f"http://127.0.0.1:{target}"
 
     def get():
@@ -635,7 +641,10 @@ async def main():
         if not ws:
             sys.exit(f"Nothing is serving CDP at {args.attach}. Start the browser with --remote-debugging-port, or use --port.")
         transport = WebSocketTransport()
-        await transport.connect(ws)
+        try:
+            await transport.connect(ws)
+        except (OSError, CDPError, asyncio.IncompleteReadError) as e:
+            sys.exit(f"Couldn't attach to {ws}: {e}")
         log("attached to", ws)
     else:
         exe, kind = find_browser(args.browser)
