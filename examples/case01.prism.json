@@ -1,0 +1,58 @@
+{
+  "app": "prism",
+  "version": 1,
+  "name": "Case 01",
+  "saved": "2026-11-26T16:19:21.000Z",
+  "rules": [
+    {
+      "name": "Isolated laptop",
+      "pattern": "\\bWKS-01\\b",
+      "flags": "",
+      "color": "#ef5b5b",
+      "style": "fill",
+      "desc": "Virginia Penn's finance laptop. Isolated by the SOC at 16:05.\nseverity: high\nticket: IR-1013",
+      "on": true,
+      "ioc": false
+    },
+    {
+      "name": "Case hosts",
+      "pattern": "\\b(?:WKS|FILE|DC|MAIL)-\\d{2}\\b",
+      "flags": "",
+      "color": "#22d3ee",
+      "style": "underline",
+      "desc": "Machines in scope for Case 01\nticket: IR-1013",
+      "on": true,
+      "ioc": false
+    },
+    {
+      "name": "Internal address",
+      "pattern": "\\b10\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\b",
+      "flags": "",
+      "color": "#94a3b8",
+      "style": "fill",
+      "desc": "Corporate LAN",
+      "on": true,
+      "ioc": false
+    },
+    {
+      "name": "Encoded PowerShell",
+      "pattern": "(?<![\\w-])-(?:enc(?:odedcommand)?|nop|w hidden)\\b",
+      "flags": "i",
+      "color": "#ec4899",
+      "style": "fill",
+      "desc": "Decode before you trust it.\nseverity: medium",
+      "on": true,
+      "ioc": false
+    },
+    {
+      "name": "Evidence file",
+      "pattern": "\\b[\\w-]+\\.(?:csv|exe|lnk|json)\\b",
+      "flags": "i",
+      "color": "#3ecf8e",
+      "style": "underline",
+      "desc": "",
+      "on": true,
+      "ioc": false
+    }
+  ]
+}

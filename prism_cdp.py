@@ -174,7 +174,7 @@ def read_rules(path, warn=None):
     """.prism.json text from a CSV/TSV file, a .prism.json export from Prism, or a file holding a Prism rule link."""
     p = Path(path)
     if p.suffix.lower() in (".csv", ".tsv"):
-        return csv_rules(p, warn)
+        return normalize(json.loads(csv_rules(p, warn)), p.stem)  # one cleanup path for every format
     text = p.read_text(encoding="utf-8-sig").strip()
     if is_link(text) and not text.startswith(("{", "[")):
         return rules_from_link(text)

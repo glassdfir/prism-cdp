@@ -1,7 +1,0 @@
-# Case 01 (The overdue invoice): signatures for working the case
-name,pattern,flags,color,style,on,desc,severity,ticket
-Isolated laptop,\bWKS-01\b,,#ef5b5b,fill,yes,Virginia Penn's finance laptop. Isolated by the SOC at 16:05.,high,IR-1013
-Case hosts,"\b(?:WKS|FILE|DC|MAIL)-\d{2}\b",,#22d3ee,underline,yes,Machines in scope for Case 01,,IR-1013
-Internal address,"\b10\.\d{1,3}\.\d{1,3}\.\d{1,3}\b",,#94a3b8,fill,yes,Corporate LAN,,
-Encoded PowerShell,(?<![\w-])-(?:enc(?:odedcommand)?|nop|w hidden)\b,i,#ec4899,fill,yes,Decode before you trust it.,medium,
-Evidence file,"\b[\w-]+\.(?:csv|exe|lnk|json)\b",i,#3ecf8e,underline,yes,,,
