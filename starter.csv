@@ -1,0 +1,13 @@
+name,pattern,flags,color,style,on,desc
+Suspicious tooling,\b(?:mimikatz|sekurlsa|rubeus|bloodhound|sharphound|psexec(?:svc)?|procdump|certutil|bitsadmin|rundll32|regsvr32|mshta|wmic|vssadmin|wevtutil|ntdsutil|DownloadString|Invoke-Expression|IEX)\b|(?<![\w-])-(?:enc(?:odedcommand)?|ec|nop|noprofile|w(?:indowstyle)? hidden)\b,i,#ef5b5b,fill,yes,"Living-off-the-land binaries, credential tools and PowerShell tradecraft."
+URL,"\b(?:https?|hxxps?|ftp)(?::|\[:\])//(?:\[\.\]|[^\s""'<>\[\]()])+",i,#a78bfa,fill,yes,"Web addresses, including hxxp and [:] defanged forms."
+IPv4,\b(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)(?:\.|\[\.\])){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)\b,,#4c8dff,fill,yes,"IPv4 address, defanged [.] included."
+Email,"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b",i,#ec4899,fill,yes,
+Domain,"\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.|\[\.\]))+(?:com|net|org|io|info|biz|xyz|top|ru|cn|co|uk|de|us|gov|edu|onion|cc|me|tk|site|online|club|example)\b",i,#22d3ee,underline,yes,Domain names on common TLDs. Add your own TLDs to the list.
+SHA-256,\b[a-f0-9]{64}\b,i,#f2a93b,fill,yes,
+SHA-1,\b[a-f0-9]{40}\b,i,#fb923c,fill,yes,
+MD5,\b[a-f0-9]{32}\b,i,#facc15,fill,yes,
+Windows path,"\b[a-z]:\\(?:[^\\\s""'<>|:*?]+\\)*[^\\\s""'<>|:*?]*|\\\\[^\\\s""']+\\[^\s""'<>|]+",i,#3ecf8e,underline,yes,Drive and UNC paths.
+Registry key,"\b(?:HKLM|HKCU|HKU|HKCR|HKCC|HKEY_[A-Z_]+)(?::)?\\[^\s""'<>]+",i,#14b8a6,underline,yes,
+Timestamp,"\b\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:[.,]\d+)?(?:Z|[+-]\d{2}:?\d{2})?",,#94a3b8,text,yes,ISO 8601 style date and time.
+Base64 blob,"(?<![A-Za-z0-9+/=])[A-Za-z0-9+/]{40,}={0,2}(?![A-Za-z0-9+/=])",,#84cc16,box,no,Long Base64 runs. Often encoded commands or payloads.
