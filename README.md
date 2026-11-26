@@ -42,7 +42,19 @@ IPv4,"\b(?:\d{1,3}\.){3}\d{1,3}\b",,#4c8dff,,,,low,
 - **Any other column** (severity, MITRE ID, ticket, owner…) is shown on the hover card under the description.
 - Saved from Excel? That works too, including Excel's byte-order mark.
 
-**`.prism.json`** exports from [Prism](https://jon.glass/prism/) also work, as does a text file holding a Prism rule link (Prism → **Sets → Copy a link to these rules**).
+### Build them in Prism
+
+The [Prism](https://jon.glass/prism/) web app is a good place to write rules: paste a sample of the page or log you care about, and you see every match and every capture group as you type the pattern. Prism CDP reads what Prism saves, as it is:
+
+- **A saved file:** Prism → **Sets → Save rules to a file…** downloads a `.prism.json`. Pass it to `--rules`.
+- **A link:** Prism → **Sets → Copy a link to these rules**, then paste it in quotes: `--rules "https://jon.glass/prism/#rules=z…"`. A text file holding the link works too.
+- **Your downloads folder:** every save downloads a new file, and browsers name repeats `case01 (1).prism.json`, `case01 (2).prism.json`… So point `--rules` at the folder or a pattern, and Prism CDP always uses the newest match. It switches as soon as you save again, and waits if there's nothing there yet:
+
+```sh
+python3 prism_cdp.py --rules ~/Downloads/case01*.prism.json
+```
+
+A folder (`--rules ~/Downloads`) takes the newest `.prism.json`, `.csv`, `.tsv` or `.json` in it. Each rule's name, pattern, flags, color, style, notes and on/off come across; the indicator flag only matters for Prism's hand-off to Tessera, so it's ignored here.
 
 Runs on macOS, Windows and Linux with Python 3.9 or newer, using the standard library only, so there's nothing to install. The `python3` that comes with macOS is fine. On Windows, use `py prism_cdp.py` (or `python`) from PowerShell or Command Prompt. Prism finds Edge and Chrome (stable, Beta, Dev and Canary) in their usual install folders.
 

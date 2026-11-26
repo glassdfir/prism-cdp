@@ -12,6 +12,9 @@ nothing in the page's DOM text (CSS Custom Highlight API).
   python3 prism_cdp.py --chrome                # launch Chrome instead
   python3 prism_cdp.py --rules sigs.csv        # rules from a CSV (or .tsv, .prism.json, a Prism rule link);
                                                # reloaded whenever the file changes
+  python3 prism_cdp.py --rules ~/Downloads/case01*.prism.json   # rules saved from the Prism web app: the newest
+                                               # match wins, so saving again in Prism updates every page
+  python3 prism_cdp.py --rules "https://jon.glass/prism/#rules=z..."   # or a Prism rule link
   python3 prism_cdp.py --starter               # starter.csv, next to this script
   python3 prism_cdp.py --port                  # launch with a debugging port on 127.0.0.1:61455 instead of a pipe
   python3 prism_cdp.py --attach                # attach to a browser already debugging on 61455 (or --attach PORT)
@@ -22,9 +25,11 @@ import argparse
 import asyncio
 import base64
 import csv
+import glob
 import json
 import os
 import shutil
+import re
 import signal
 import struct
 import subprocess
@@ -32,6 +37,7 @@ import sys
 import threading
 import time
 import urllib.request
+import zlib
 
 IS_WIN = os.name == "nt"
 if not IS_WIN:
@@ -126,15 +132,68 @@ def csv_rules(path, warn=None):
     return json.dumps({"name": p.stem, "rules": rules})
 
 
+STYLES = ("fill", "underline", "box", "text")
+RULE_FILES = ("*.prism.json", "*.csv", "*.tsv", "*.json")  # what a folder given to --rules is searched for
+
+
+def normalize(data, fallback_name=""):
+    """Rules in the shape Prism's web app exports ({app, version, name, saved, rules: [...]}, or a bare list),
+    checked and cleaned the way its importer does it. Returns .prism.json text for the engine."""
+    rules = data if isinstance(data, list) else data.get("rules") if isinstance(data, dict) else None
+    if not isinstance(rules, list) or not rules:
+        raise ValueError("no rules found (expected a Prism export: {\"rules\": [...]})")
+    out = []
+    for i, r in enumerate(rules, 1):
+        if not isinstance(r, dict) or not isinstance(r.get("pattern"), str):
+            raise ValueError(f"rule {i} has no pattern")
+        flags = "".join(dict.fromkeys(c for c in str(r.get("flags") or "") if c in "imsu"))
+        rule = {"name": str(r.get("name") or "Rule")[:120], "pattern": r["pattern"], "flags": flags,
+                "style": r.get("style") if r.get("style") in STYLES else "fill",
+                "desc": str(r.get("desc") or r.get("description") or ""), "on": r.get("on") is not False}
+        if re.fullmatch(r"#[0-9a-fA-F]{6}", str(r.get("color") or "")):
+            rule["color"] = r["color"].lower()
+        out.append(rule)
+    name = (data.get("name") if isinstance(data, dict) else None) or fallback_name
+    return json.dumps({"name": str(name), "rules": out})
+
+
+def is_link(spec):
+    return bool(re.search(r"[#&]rules=[zj][A-Za-z0-9_-]+", spec or ""))
+
+
+def rules_from_link(text):
+    """A Prism rule link (Sets > Copy a link to these rules): #rules=z<deflate-raw, base64url> or j<base64url JSON>."""
+    m = re.search(r"[#&]rules=([zj])([A-Za-z0-9_-]+)", text)
+    raw = base64.urlsafe_b64decode(m.group(2) + "=" * (-len(m.group(2)) % 4))
+    if m.group(1) == "z":
+        raw = zlib.decompress(raw, -15)  # raw deflate, like the browser's CompressionStream('deflate-raw')
+    return normalize(json.loads(raw.decode("utf-8")), "Prism link")
+
+
 def read_rules(path, warn=None):
-    """.prism.json text for a CSV/TSV file, a .prism.json export, or a file holding a Prism rule link."""
+    """.prism.json text from a CSV/TSV file, a .prism.json export from Prism, or a file holding a Prism rule link."""
     p = Path(path)
     if p.suffix.lower() in (".csv", ".tsv"):
         return csv_rules(p, warn)
     text = p.read_text(encoding="utf-8-sig").strip()
-    if "rules=" not in text:
-        json.loads(text)  # fail early, with a line number, on a broken rules file
-    return text
+    if is_link(text) and not text.startswith(("{", "[")):
+        return rules_from_link(text)
+    stem = re.sub(r"(\.prism)?\.json$", "", p.name, flags=re.I)
+    return normalize(json.loads(text), stem)
+
+
+def resolve_rules(spec):
+    """The file a --rules value points at now: the file itself, or the newest rules file in a folder or matching
+    a pattern (browsers save repeat exports as "name (1).prism.json", "name (2).prism.json", ...)."""
+    p = Path(os.path.expanduser(spec))
+    if p.is_dir():
+        found = [f for pat in RULE_FILES for f in p.glob(pat)]
+    elif glob.has_magic(str(p)):
+        found = [Path(f) for f in glob.glob(str(p))]
+    else:
+        return p
+    found = [f for f in found if f.is_file()]
+    return max(found, key=lambda f: f.stat().st_mtime) if found else None
 
 
 def log(*a):
@@ -337,16 +396,26 @@ class Prism:
         self.enabled = not args.off
         self.rules = None
         self.rules_mtime = None
+        self.rules_src = None  # the file the rules came from (a folder or pattern resolves to its newest match)
         self.verbose = args.verbose
 
     # rules ----------------------------------------------------------------
     def load_rules_file(self):
-        p = self.args.rules
-        if not p:
+        """Load what --rules points at. Returns the file it used (None for a link), or False if there's nothing."""
+        spec = self.args.rules
+        if not spec:
             return False
-        self.rules_mtime = Path(p).stat().st_mtime  # set first, so a broken file isn't retried every second
+        if is_link(spec):
+            self.rules_src, self.rules_mtime = None, None
+            self.rules = rules_from_link(spec)
+            return None
+        p = resolve_rules(spec)
+        if p is None:
+            self.rules_src = None
+            raise FileNotFoundError(f"no rules file there yet ({', '.join(RULE_FILES)}); waiting for one")
+        self.rules_src, self.rules_mtime = p, p.stat().st_mtime  # set first, so a broken file isn't retried every second
         self.rules = read_rules(p, warn=log)
-        return True
+        return p
 
     def payload(self):
         starter = None
@@ -506,7 +575,8 @@ class Prism:
         tops = [v for *_, v in rows if v and v.get("top")]
         frames = [v for *_, v in rows if v and not v.get("top")]
         log(f"{len(self.sessions)} targets, {len(tops)} tabs, {len(frames)} frames with Prism, rules: "
-            f"{self.args.rules or 'none'}, {'on' if self.enabled else 'off'}")
+            f"{('Prism link' if is_link(self.args.rules) else self.rules_src or self.args.rules) or 'none'}, "
+            f"{'on' if self.enabled else 'off'}")
         for v in tops:
             print(f"  {v['hits']:>6} hits  {v['rules']} rules  {'on ' if v['on'] else 'off'}  {v['url'][:100]}")
             for p in v.get("paused") or []:
@@ -515,21 +585,26 @@ class Prism:
             print(f"  {sum(f['hits'] for f in frames):>6} hits in {len(frames)} embedded frames")
 
     async def watch_rules(self):
+        """Reload when the rules file changes, or when a newer one lands in the folder or pattern --rules names."""
         while True:
             await asyncio.sleep(1)
-            p = self.args.rules
-            if not p:
+            spec = self.args.rules
+            if not spec or is_link(spec):
                 continue
             try:
-                m = Path(p).stat().st_mtime
+                p = resolve_rules(spec)
+                if p is None or (p == self.rules_src and p.stat().st_mtime == self.rules_mtime):
+                    continue
             except OSError:
                 continue
-            if m != self.rules_mtime:
-                try:
-                    self.load_rules_file()
-                    await self.push_rules()
-                except (ValueError, OSError) as e:
-                    log(f"{p}: not reloaded, {e}")
+            try:
+                switched = p != self.rules_src
+                self.load_rules_file()
+                if switched and str(p) != os.path.expanduser(spec):
+                    log("rules now from", p)
+                await self.push_rules()
+            except (ValueError, OSError) as e:
+                log(f"{p}: not reloaded, {e}")
 
     async def detach(self):
         """Leave the browser as it was: remove Prism from every frame, stop injecting, let go of every target."""
@@ -605,8 +680,10 @@ async def main():
             pass
     ap = argparse.ArgumentParser(description="Prism highlighting on every page in Edge or Chrome, over CDP.")
     ap.add_argument("urls", nargs="*", help="pages to open at start")
-    ap.add_argument("--rules", help="rules file: CSV/TSV, a .prism.json export, or a Prism rule link "
-                                    "(default: ./rules.csv or ./rules.prism.json); reloaded when it changes")
+    ap.add_argument("--rules", metavar="FILE|FOLDER|PATTERN|LINK",
+                    help="rules: a CSV/TSV, a .prism.json export from Prism, or a Prism rule link (in quotes). A folder "
+                         "or a pattern like '~/Downloads/case01*.prism.json' uses the newest match and follows new "
+                         "exports. Reloaded whenever it changes (default: ./rules.csv or ./rules.prism.json)")
     ap.add_argument("--starter", action="store_true", help="use starter.csv next to this script")
     ap.add_argument("--attach", metavar="PORT|URL", nargs="?", const=str(DEFAULT_PORT),
                     help=f"attach to a browser started with --remote-debugging-port (bare --attach: {DEFAULT_PORT})")
@@ -708,10 +785,18 @@ async def main():
     cdp = CDP(transport)
     prism = Prism(cdp, args)
     try:
-        if prism.load_rules_file():
-            log("rules:", args.rules)
-        else:
+        used = prism.load_rules_file()
+        if used is False:
             log("no rules yet: use the Prism control in a page, `rules <path>`, or `starter`")
+        else:
+            log("rules:", "Prism link" if used is None else used if str(used) == os.path.expanduser(args.rules)
+                else f"{args.rules} (now {used.name})")
+    except FileNotFoundError as e:
+        spec = os.path.expanduser(args.rules)
+        if Path(spec).is_dir() or glob.has_magic(spec):
+            log(f"{args.rules}: {e}")  # a folder or pattern with nothing in it yet: the watcher picks up the first one
+        else:
+            sys.exit(f"{args.rules}: {e}")
     except (ValueError, OSError) as e:
         sys.exit(f"{args.rules}: {e}")
     await prism.start()
@@ -762,9 +847,9 @@ async def main():
                     prism.load_rules_file()
                     await prism.push_rules()
                 elif cmd in ("rules", "starter") and (rest or cmd == "starter"):
-                    args.rules = str(STARTER) if cmd == "starter" else os.path.expanduser(rest.strip())
-                    prism.load_rules_file()
-                    log("rules:", args.rules)
+                    args.rules = str(STARTER) if cmd == "starter" else rest.strip().strip('"\'')
+                    used = prism.load_rules_file()
+                    log("rules:", "Prism link" if used is None else used)
                     await prism.push_rules()
                 elif cmd == "open" and rest:
                     await cdp.send("Target.createTarget", {"url": rest.strip()})
