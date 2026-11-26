@@ -42,6 +42,18 @@ IPv4,"\b(?:\d{1,3}\.){3}\d{1,3}\b",,#4c8dff,,,,low,
 - **Any other column** (severity, MITRE ID, ticket, owner…) is shown on the hover card under the description.
 - Saved from Excel? That works too, including Excel's byte-order mark.
 
+### Edit them in the page
+
+Click **Rules** on the Prism control in any tab for the rules editor. Each rule has an on/off switch, a color, its name, the pattern (checked as you type, with the browser's own error if it doesn't compile), flags, a style and notes, plus any extra CSV columns like severity or ticket. Every rule shows how many hits it has on the page, so you can see what a change does. Add, delete and reorder rules, then **Save**:
+
+- The rules are written back to the `--rules` file and every tab updates. A `.prism.json` stays in Prism's format, so it still opens in the web app. A CSV keeps its comment lines, column names and extra columns; a column is added only if a rule needs one (a color, a style, a rule switched off).
+- Rules that didn't come from a file of yours (`--starter`, a link, or none at all) are saved to `rules.prism.json` in the folder you ran Prism CDP from, the file it loads by default next time. The bundled `starter.csv` is never changed.
+- **Paste…** and **Starter rules** fill the editor with those rules as a draft: **Save** keeps them, **Cancel** throws them away.
+
+![The rules editor](images/editor.png)
+
+Saving goes through a channel that only exists in Prism's isolated world, so the page's own scripts can't call it or see your rules, and the controller decides which file is written.
+
 ### Build them in Prism
 
 The [Prism](https://jon.glass/prism/) web app is a good place to write rules: paste a sample of the page or log you care about, and you see every match and every capture group as you type the pattern. Prism CDP reads what Prism saves, as it is:
@@ -101,7 +113,7 @@ Type these at the `prism_cdp.py` prompt:
 | `open <url>` | Open a new tab |
 | `quit` (or Ctrl+C, or Ctrl+Break on Windows) | Remove Prism from every page and exit. Closes the browser if Prism launched it, unless `--keep-open`. |
 
-Each tab also gets the floating **Prism** control (bottom right) for loading rules into just that tab, turning it off, or removing it until the tab reloads. `--no-ui` hides that control. Other options: `--off` (start with highlighting off), `--context [N]` (also show the text around each hit on the hover card, N characters each side, 100 if you leave N out; it's off by default because on a live page that text is already on screen), `--browser PATH` or `PRISM_BROWSER` (another Chromium browser), `--browser-arg ARG`, `--profile DIR`, `-v`.
+Each tab also gets the floating **Prism** control (bottom right): **Rules** opens the editor, **Off** turns highlighting off in that tab, and **✕** removes Prism from it until the tab reloads. `--no-ui` hides that control. Other options: `--off` (start with highlighting off), `--context [N]` (also show the text around each hit on the hover card, N characters each side, 100 if you leave N out; it's off by default because on a live page that text is already on screen), `--browser PATH` or `PRISM_BROWSER` (another Chromium browser), `--browser-arg ARG`, `--profile DIR`, `-v`.
 
 ## How it stays out of the way
 
@@ -122,7 +134,7 @@ Each tab also gets the floating **Prism** control (bottom right) for loading rul
 ## Files
 
 - `prism_cdp.py` is the controller: launching and attaching, the pipe and WebSocket transports, tab and frame tracking, and live rule reloads.
-- `examples/case01.prism.json` and `examples/case01.csv` hold the rules from the screenshot, for [Case 01](https://jon.glass/cases/arclight/), in both formats: `python3 prism_cdp.py --rules examples/case01.prism.json https://jon.glass/cases/arclight/`. The `.prism.json` is a Prism rule file, so it also opens in the Prism web app (**Sets → Load rules from a file…**) if you want to edit it there. The CSV shows the same rules as a spreadsheet, with severity and ticket as their own columns.
+- `examples/case01.prism.json` holds the rules from the screenshot, for [Case 01](https://jon.glass/cases/arclight/): `python3 prism_cdp.py --rules examples/case01.prism.json https://jon.glass/cases/arclight/`. It's a Prism rule file, so it also opens in the Prism web app (**Sets → Load rules from a file…**) if you want to edit it there.
 - `starter.csv` holds starter DFIR signatures (tooling, URLs, IPs, hashes, paths, registry keys and more). It's also offered by the **Starter rules** button in each tab, and it's a working example of the CSV format.
 - `engine.js` is the highlighter injected into every page, adapted from Prism's.
 

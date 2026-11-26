@@ -50,6 +50,7 @@ HERE = Path(__file__).resolve().parent
 ENGINE = HERE / "engine.js"
 STARTER = HERE / "starter.csv"
 WORLD = "prism"
+SAVE_BINDING = "__prismSave"  # exposed only in Prism's isolated world: page scripts can't call it
 def browser_paths(kind):
     """Where Edge or Chrome usually lives on this OS: stable first, then the preview channels."""
     if IS_WIN:
@@ -109,13 +110,13 @@ def csv_rules(path, warn=None):
                 if warn:
                     warn(f"{p.name} line {reader.line_num}: more cells than the header, so the extra commas were "
                          f"kept in the pattern. Put patterns with commas in double quotes to be sure.")
-            r, extra = {}, []
+            r, extra = {}, {}
             for h, v in zip(header, row):
                 key = COLUMNS.get(h.lower())
                 if key and key not in r:
                     r[key] = v if key == "pattern" else v.strip()
-                elif v.strip() and h:
-                    extra.append(f"{h}: {v.strip()}")
+                elif h and h not in extra:
+                    extra[h] = v.strip()
             if not r.get("pattern", "").strip():
                 continue
             rule = {"name": r.get("name") or r["pattern"][:40], "pattern": r["pattern"], "flags": r.get("flags", ""),
@@ -123,9 +124,10 @@ def csv_rules(path, warn=None):
             for k in ("color", "style"):
                 if r.get(k):
                     rule[k] = r[k]
-            desc = "\n".join(x for x in [r.get("desc", "")] + extra if x)
-            if desc:
-                rule["desc"] = desc
+            if r.get("desc"):
+                rule["desc"] = r["desc"]
+            if any(extra.values()):
+                rule["extra"] = extra
             rules.append(rule)
     if not rules:
         raise ValueError("no rules found")
@@ -152,6 +154,12 @@ def normalize(data, fallback_name=""):
                 "desc": str(r.get("desc") or r.get("description") or ""), "on": r.get("on") is not False}
         if re.fullmatch(r"#[0-9a-fA-F]{6}", str(r.get("color") or "")):
             rule["color"] = r["color"].lower()
+        if isinstance(r.get("extra"), dict):  # CSV columns Prism has no field for (severity, ticket, ...)
+            extra = {str(k)[:60]: str(v)[:500] for k, v in list(r["extra"].items())[:20] if str(k).strip()}
+            if any(extra.values()):
+                rule["extra"] = extra
+        if isinstance(r.get("ioc"), bool):  # Prism's "send to Tessera" flag: kept so saving doesn't drop it
+            rule["ioc"] = r["ioc"]
         out.append(rule)
     name = (data.get("name") if isinstance(data, dict) else None) or fallback_name
     return json.dumps({"name": str(name), "rules": out})
@@ -180,6 +188,83 @@ def read_rules(path, warn=None):
         return rules_from_link(text)
     stem = re.sub(r"(\.prism)?\.json$", "", p.name, flags=re.I)
     return normalize(json.loads(text), stem)
+
+
+def write_atomic(path, text):
+    """Write the whole file or nothing: a half-written rules file would break every tab on the next reload."""
+    path = Path(path)
+    tmp = path.with_name(f".{path.name}.prism-tmp")
+    with open(tmp, "w", encoding="utf-8", newline="") as f:
+        f.write(text)
+    os.replace(tmp, path)
+
+
+def rules_to_prism_json(data):
+    """Rules as Prism's web app saves them, so the file still opens there."""
+    from datetime import datetime, timezone
+    rules = []
+    for r in data["rules"]:
+        out = {"name": r["name"], "pattern": r["pattern"], "flags": r["flags"], "color": r.get("color", ""),
+               "style": r["style"], "desc": r.get("desc", ""), "on": r["on"], "ioc": r.get("ioc", True)}
+        if r.get("extra"):
+            out["extra"] = r["extra"]
+        rules.append(out)
+    saved = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    return json.dumps({"app": "prism", "version": 1, "name": data.get("name") or "Prism rules", "saved": saved,
+                       "rules": rules}, indent=2, ensure_ascii=False) + "\n"
+
+
+def rules_to_csv(data, original):
+    """Rules as CSV, keeping the original file's comment lines, column names and column order. Columns are added
+    only when a rule needs one (a color, a style, a rule switched off ...)."""
+    import io
+    delim = "\t" if Path(original).suffix.lower() == ".tsv" else ","
+    comments, header = [], None
+    try:
+        with open(original, newline="", encoding="utf-8-sig") as f:
+            for line in f:
+                if line.lstrip().startswith("#") and header is None:
+                    comments.append(line.rstrip("\r\n"))
+                elif line.strip():
+                    header = next(csv.reader([line], delimiter=delim))
+                    break
+    except OSError:
+        pass
+    header = [h.strip() for h in (header or ["name", "pattern"])]
+    field_of = {h: COLUMNS.get(h.lower()) for h in header}
+    have = set(v for v in field_of.values() if v)
+    rules = data["rules"]
+    need = {"name", "pattern", "color"}
+    need |= {"flags"} if any(r["flags"] for r in rules) else set()
+    need |= {"style"} if any(r["style"] != "fill" for r in rules) else set()
+    need |= {"on"} if any(not r["on"] for r in rules) else set()
+    need |= {"desc"} if any(r.get("desc") for r in rules) else set()
+    for f in ("name", "pattern", "flags", "color", "style", "on", "desc"):
+        if f in need and f not in have:
+            header.append(f)
+            field_of[f] = f
+    for r in rules:
+        for k in (r.get("extra") or {}):
+            if k not in header:
+                header.append(k)
+                field_of[k] = None
+    buf = io.StringIO()
+    w = csv.writer(buf, delimiter=delim, lineterminator="\n")
+    for c in comments:
+        buf.write(c + "\n")
+    w.writerow(header)
+    for r in rules:
+        row = []
+        for h in header:
+            f = field_of.get(h)
+            if f == "on":
+                row.append("yes" if r["on"] else "no")
+            elif f:
+                row.append(r.get(f, "") or "")
+            else:
+                row.append((r.get("extra") or {}).get(h, ""))
+        w.writerow(row)
+    return buf.getvalue()
 
 
 def resolve_rules(spec):
@@ -417,15 +502,59 @@ class Prism:
         self.rules = read_rules(p, warn=log)
         return p
 
-    def payload(self):
+    def payload(self, notice=None):
         starter = None
         try:
             starter = read_rules(STARTER) if STARTER.exists() else None
         except (ValueError, OSError):
             pass
         boot = {"rules": self.rules, "starter": starter, "enabled": self.enabled, "ui": not self.args.no_ui,
-                "contextChars": self.args.context}
+                "contextChars": self.args.context, "saveTo": self.save_target().name, "notice": notice}
         return f"globalThis.__PRISM_BOOT__ = {json.dumps(boot)};\n{self.engine}"
+
+    # saving edits from the page -------------------------------------------
+    def save_target(self):
+        """Where edits made in a tab are saved: back into the rules file, unless the rules didn't come from a file
+        of the user's (the bundled starter.csv, a link, or nothing), in which case ./rules.prism.json, the file
+        Prism CDP loads by default next time. An existing file there that isn't the current source isn't touched."""
+        src = self.rules_src
+        if src and src.suffix.lower() in (".json", ".csv", ".tsv") and src.resolve() != STARTER.resolve():
+            return src
+        cwd = Path.cwd()
+        for n in range(1, 100):
+            p = cwd / ("rules.prism.json" if n == 1 else f"rules ({n}).prism.json")
+            if not p.exists() or (src and p.resolve() == src.resolve()):
+                return p
+        return cwd / "rules.prism.json"
+
+    def on_binding(self, p, sid):
+        if p.get("name") != SAVE_BINDING or (sid, p.get("executionContextId")) not in self.contexts:
+            return
+        asyncio.ensure_future(self.save_from_page(sid, p["executionContextId"], p.get("payload") or ""))
+
+    async def save_from_page(self, sid, cid, payload):
+        target = self.save_target()
+        try:
+            if len(payload) > 2_000_000:
+                raise ValueError("too large")
+            data = json.loads(normalize(json.loads(payload), (json.loads(self.rules or "{}") or {}).get("name", "")))
+            if len(data["rules"]) > 1000:
+                raise ValueError("too many rules")
+            text = rules_to_csv(data, target) if target.suffix.lower() in (".csv", ".tsv") else rules_to_prism_json(data)
+            write_atomic(target, text)
+        except (ValueError, OSError, KeyError, TypeError) as e:
+            log(f"couldn't save edited rules to {target}: {e}")
+            try:
+                await self.cdp.send("Runtime.evaluate", {"expression": f"globalThis.prismHL && prismHL.notice("
+                                    f"{json.dumps('Not saved: ' + str(e))}, true)", "contextId": cid}, sid)
+            except (CDPError, asyncio.TimeoutError):
+                pass
+            return
+        moved = target != self.rules_src
+        self.args.rules = str(target)
+        self.load_rules_file()  # read back what was written, so every tab gets exactly what's on disk
+        log(f"saved {len(data['rules'])} rules to {target}" + (" (now the rules file)" if moved else ""))
+        await self.push_rules(notice=f"Saved to {target.name}")
 
     # targets --------------------------------------------------------------
     def on_attached(self, p, _parent):
@@ -450,6 +579,7 @@ class Prism:
     async def setup(self, sid, ti, waiting):
         try:
             await self.cdp.send("Runtime.enable", session=sid)
+            await self.cdp.send("Runtime.addBinding", {"name": SAVE_BINDING, "executionContextName": WORLD}, sid)
             await self.cdp.send("Page.enable", session=sid)
             # Cross-origin iframes run in their own process: attach to those too, as they appear. Workers are
             # attached only so they can be released at once (waitForDebuggerOnStart would otherwise hold them)
@@ -517,6 +647,7 @@ class Prism:
         c.on("Runtime.executionContextDestroyed", self.on_ctx_destroyed)
         c.on("Runtime.executionContextsCleared", self.on_ctx_cleared)
         c.on("Runtime.consoleAPICalled", self.on_console)
+        c.on("Runtime.bindingCalled", self.on_binding)
         await c.send("Target.setDiscoverTargets", {"discover": True})
         await c.send("Target.setAutoAttach", {"autoAttach": True, "waitForDebuggerOnStart": True, "flatten": True,
                                               "filter": [{"type": "page"}]})
@@ -553,12 +684,12 @@ class Prism:
             except (CDPError, asyncio.TimeoutError):
                 pass
 
-    async def push_rules(self):
+    async def push_rules(self, notice=None):
         await self.reregister()
         # Re-run the engine with the new rules wherever Prism is running (it replaces its previous run), and wait
         # for the run to finish, so "reloaded" means the rules are checked and running. Each pattern's stall test
         # can take up to 1.5 s, hence the longer timeout. Frames where someone pressed ✕ stay clear until they reload.
-        expr = (f"(async () => {{ if (!globalThis.prismHL) return false; {self.payload()}; "
+        expr = (f"(async () => {{ if (!globalThis.prismHL) return false; {self.payload(notice)}; "
                 f"await globalThis.__PRISM_READY__; return true; }})()")
         n = sum(1 for *_, v in await self.each_context(expr, timeout=60) if v)
         log(f"rules reloaded in {n} frame{'s' if n != 1 else ''}")
