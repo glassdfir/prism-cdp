@@ -113,7 +113,7 @@ Type these at the `prism_cdp.py` prompt:
 | `open <url>` | Open a new tab |
 | `quit` (or Ctrl+C, or Ctrl+Break on Windows) | Remove Prism from every page and exit. Closes the browser if Prism launched it, unless `--keep-open`. |
 
-Each tab also gets the floating **Prism** control (bottom right): **Rules** opens the editor, **Off** turns highlighting off in that tab, and **✕** removes Prism from it until the tab reloads. `--no-ui` hides that control. Other options: `--off` (start with highlighting off), `--no-copy` (no copy buttons on the hover card), `--context [N]` (also show the text around each hit on the hover card, N characters each side, 100 if you leave N out; it's off by default because on a live page that text is already on screen), `--browser PATH` or `PRISM_BROWSER` (another Chromium browser), `--browser-arg ARG`, `--profile DIR`, `-v`.
+Each tab also gets the floating **Prism** control (bottom right): **Rules** opens the editor, **Off** turns highlighting off in that tab, and **✕** removes Prism from it until the tab reloads. `--no-ui` hides that control. Other options: `--off` (start with highlighting off), `--no-copy` (no copy buttons on the hover card), `--no-match` (don't repeat the matched text on the hover card; capture groups still show), `--context [N]` (also show the text around each hit on the hover card, N characters each side, 100 if you leave N out; it's off by default because on a live page that text is already on screen), `--browser PATH` or `PRISM_BROWSER` (another Chromium browser), `--browser-arg ARG`, `--profile DIR`, `-v`.
 
 ## How it stays out of the way
 

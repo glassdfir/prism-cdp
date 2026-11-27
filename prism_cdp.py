@@ -511,7 +511,7 @@ class Prism:
         except (ValueError, OSError):
             pass
         boot = {"rules": self.rules, "starter": starter, "enabled": self.enabled, "ui": not self.args.no_ui,
-                "contextChars": self.args.context, "copy": not self.args.no_copy, "saveTo": self.save_target().name, "notice": notice}
+                "contextChars": self.args.context, "copy": not self.args.no_copy, "match": not self.args.no_match, "saveTo": self.save_target().name, "notice": notice}
         return f"globalThis.__PRISM_BOOT__ = {json.dumps(boot)};\n{self.engine}"
 
     # saving edits from the page -------------------------------------------
@@ -835,6 +835,8 @@ async def main():
     ap.add_argument("--headless", action="store_true", help="run the launched browser headless (testing)")
     ap.add_argument("--no-ui", action="store_true", help="no floating Prism control in pages")
     ap.add_argument("--no-copy", action="store_true", help="no Copy match / Copy context buttons on the hover card")
+    ap.add_argument("--no-match", action="store_true", help="don't repeat the matched text on the hover card "
+                                                           "(capture groups still show)")
     ap.add_argument("--off", action="store_true", help="start with highlighting off")
     ap.add_argument("--context", type=int, nargs="?", const=100, default=0, metavar="N",
                     help="show the text around each hit on the hover card: N characters each side (bare --context: 100). "
