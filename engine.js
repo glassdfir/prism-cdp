@@ -9,7 +9,7 @@
  * - Makes no network requests and saves nothing. Rules come from the controller and live in memory only.
  *
  * globalThis.__PRISM_BOOT__ (set by the controller just before this file):
- *   { rules, starter, enabled, ui, contextChars (0 = no context on the hover card) }  rules and starter are .prism.json text the controller built from files
+ *   { rules, starter, enabled, ui, copy (false = no copy buttons), contextChars (0 = no context on the hover card) }  rules and starter are .prism.json text the controller built from files
  * Source: https://jon.glass/prism/ · MIT © 2026 Jon Glass
  */
 // The run's promise, so the controller can wait for rules to be checked and running before it reports back
@@ -20,6 +20,7 @@ globalThis.__PRISM_READY__ = (async () => {
   // Characters of surrounding text shown on the hover card. Off (0) unless the controller's --context asks for it:
   // on a live page the text around a hit is already on screen.
   const CONTEXT_CHARS = Math.max(0, Number(BOOT.contextChars) || 0);
+  const COPY = BOOT.copy !== false;  // the hover card's copy buttons; --no-copy turns them off
   // Web pages and local files only: leave edge://, about:, devtools and extension pages alone
   if (!/^(https?|file):$/.test(location.protocol)) return;
   let TOP = true; try { TOP = window.top === window; } catch (e) { TOP = false; }
@@ -272,7 +273,7 @@ globalThis.__PRISM_READY__ = (async () => {
         ${notes(r) ? `<div class="desc">${esc(notes(r))}</div>` : ''}
         <div class="val mono">${esc(node.data.slice(h.s, h.e))}</div>${groups}
         ${cx ? `<div class="ctx mono">${esc(cx.before)}<mark data-bg="rgba(${R},${G},${B},.4)">${esc(cx.match)}</mark>${esc(cx.after)}</div>` : ''}
-        <div class="act"><button data-copy="val">Copy match</button>${cx ? '<button data-copy="ctx">Copy context</button>' : ''}${i === 0 ? '<span class="brand">Prism</span>' : ''}</div>
+        ${COPY ? `<div class="act"><button data-copy="val">Copy match</button>${cx ? '<button data-copy="ctx">Copy context</button>' : ''}${i === 0 ? '<span class="brand">Prism</span>' : ''}</div>` : ''}
       </div>`;
     }).join(''));
     card.querySelectorAll('[data-bg]').forEach((e) => { e.style.background = e.dataset.bg; }); // CSSOM: allowed under a strict CSP
