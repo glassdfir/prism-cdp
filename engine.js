@@ -192,8 +192,23 @@ globalThis.__PRISM_READY__ = (async () => {
     root.adoptedStyleSheets = [sh];
     setHTML(root, html.slice(m[0].length));
   }
+  // Prism's two elements (hover card and control) hang off <html>, not <body>, because single-page apps
+  // (Splunk, for one) clear out <body> children they don't own. They go in the browser's top layer as manual
+  // popovers, so no page overlay, z-index or transform can cover or clip them; and if the page removes them
+  // anyway, they're put back.
+  function mount(el) {
+    if (!el.isConnected) document.documentElement.appendChild(el);
+    if (el.showPopover && !el.matches(':popover-open')) { try { el.showPopover(); } catch (e) {} }
+  }
+  let remountT = 0, remounts = 0;
+  const guard = new MutationObserver(() => {
+    if (remountT || (host.isConnected && (!SHOW_UI || pill.isConnected))) return;
+    if (++remounts > 50) { guard.disconnect(); console.warn('[Prism] This page keeps removing the Prism control; leaving it off.'); return; }
+    remountT = setTimeout(() => { remountT = 0; mount(host); if (SHOW_UI) mount(pill); }, 50);
+  });
   const host = document.createElement('div');
   host.setAttribute('data-prism-tip', '');
+  host.setAttribute('popover', 'manual');
   host.style.cssText = 'all:initial;position:fixed;z-index:2147483647;left:0;top:0;display:none';
   const shadow = host.attachShadow({ mode: 'closed' });
   styled(shadow, `<style>
@@ -219,7 +234,7 @@ globalThis.__PRISM_READY__ = (async () => {
     .brand { margin-left: auto; font-size: 11px; color: #8b97a8; }
   </style><div class="card" part="card"></div>`);
   const card = shadow.querySelector('.card');
-  (document.body || document.documentElement).appendChild(host);
+  mount(host);
   let shown = null, hideT = 0, overCard = false;
 
   const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -312,7 +327,7 @@ globalThis.__PRISM_READY__ = (async () => {
       }
     });
   }
-  document.addEventListener('mousemove', onMove, { passive: true });
+  addEventListener('mousemove', onMove, { capture: true, passive: true });  // capture: before any page handler can stop it
   const onScroll = () => { if (shown && !overCard) hide(); };
   const onKey = (e) => { if (e.key === 'Escape' && shown) hide(); };
   addEventListener('scroll', onScroll, { capture: true, passive: true });
@@ -393,6 +408,7 @@ globalThis.__PRISM_READY__ = (async () => {
   // ---------- Floating control (same closed shadow root as the hover card) ----------
   const pill = document.createElement('div');
   pill.setAttribute('data-prism-tip', '');
+  pill.setAttribute('popover', 'manual');
   pill.style.cssText = 'all:initial;position:fixed;z-index:2147483647;right:16px;bottom:16px';
   const ps = pill.attachShadow({ mode: 'closed' });
   styled(ps, `<style>
@@ -437,7 +453,8 @@ globalThis.__PRISM_READY__ = (async () => {
     <div class="foot"><button id="add">+ Rule</button><button id="paste">Paste…</button>${BOOT.starter ? '<button id="starter">Starter rules</button>' : ''}
       <span class="grow"></span><span class="to" id="to"></span><button id="cancel">Cancel</button><button class="primary" id="save">Save</button></div>
   </div>`);
-  if (SHOW_UI) (document.body || document.documentElement).appendChild(pill);
+  if (SHOW_UI) mount(pill);
+  guard.observe(document.documentElement, { childList: true });
   const $p = (id) => ps.getElementById(id);
   const canSave = () => typeof globalThis.__prismSave === 'function';  // the controller's channel, in this world only
   let noticeT = 0;
@@ -568,7 +585,8 @@ globalThis.__PRISM_READY__ = (async () => {
       stop();
       for (const r of rules) CSS.highlights.delete('prism-' + r.id);
       document.adoptedStyleSheets = document.adoptedStyleSheets.filter((s) => s !== sheet);
-      document.removeEventListener('mousemove', onMove);
+      removeEventListener('mousemove', onMove, { capture: true });
+      guard.disconnect(); clearTimeout(remountT);
       removeEventListener('scroll', onScroll, { capture: true });
       document.removeEventListener('keydown', onKey);
       host.remove(); pill.remove();
