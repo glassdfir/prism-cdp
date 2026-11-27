@@ -1,0 +1,6 @@
+# Networks for the Enhance button
+cidr,name,color,desc,owner
+10.0.0.0/16,Corporate LAN,#94a3b8,All internal ranges,IT
+10.0.1.0/24,Finance VLAN,#f2a93b,Finance workstations,Finance
+203.0.113.0/24,Watchlist,#ef5b5b,Documentation range used in examples,IR
+2001:db8::/32,IPv6 docs range,#a78bfa,,

@@ -26,6 +26,7 @@ import asyncio
 import base64
 import csv
 import glob
+import ipaddress
 import json
 import os
 import shutil
@@ -51,6 +52,7 @@ ENGINE = HERE / "engine.js"
 STARTER = HERE / "starter.csv"
 WORLD = "prism"
 SAVE_BINDING = "__prismSave"  # exposed only in Prism's isolated world: page scripts can't call it
+ENHANCE_BINDING = "__prismEnhance"  # likewise: the hover card's Enhance button asks for a lookup
 def browser_paths(kind):
     """Where Edge or Chrome usually lives on this OS: stable first, then the preview channels."""
     if IS_WIN:
@@ -189,6 +191,46 @@ def read_rules(path, warn=None):
         return rules_from_link(text)
     stem = re.sub(r"(\.prism)?\.json$", "", p.name, flags=re.I)
     return normalize(json.loads(text), stem)
+
+
+LOOKUP_COLUMNS = {"cidr": "cidr", "subnet": "cidr", "network": "cidr", "range": "cidr", "name": "name",
+                  "title": "name", "color": "color", "colour": "color", "style": "style", "desc": "desc",
+                  "description": "desc"}
+
+
+def read_lookup(path, warn=None):
+    """Networks for the Enhance button, from a CSV/TSV: a header row with a cidr column (10.0.1.0/24, a bare
+    address, or an IPv6 network), then name, color, style, desc and any extra columns, which go on the hover card."""
+    p = Path(os.path.expanduser(path))
+    out = []
+    with open(p, newline="", encoding="utf-8-sig") as f:
+        reader = csv.reader(f, delimiter="\t" if p.suffix.lower() == ".tsv" else ",")
+        header = None
+        for row in reader:
+            if not any(c.strip() for c in row) or row[0].lstrip().startswith("#"):
+                continue
+            if header is None:
+                header = [h.strip() for h in row]
+                if "cidr" not in [LOOKUP_COLUMNS.get(h.lower()) for h in header]:
+                    raise ValueError(f"line {reader.line_num}: the first row must be a header with a cidr column "
+                                     f"(cidr,name,color,desc). Found: {', '.join(header)}")
+                continue
+            e, extra = {}, {}
+            for h, v in zip(header, row):
+                key = LOOKUP_COLUMNS.get(h.lower())
+                if key and key not in e:
+                    e[key] = v.strip()
+                elif h and v.strip():
+                    extra[h] = v.strip()
+            try:
+                net = ipaddress.ip_network(e.get("cidr", ""), strict=False)
+            except ValueError:
+                if warn:
+                    warn(f"{p.name} line {reader.line_num}: {e.get('cidr')!r} isn't a network; skipped")
+                continue
+            out.append({"net": net, "name": e.get("name") or str(net), "color": e.get("color", ""),
+                        "style": e.get("style", ""), "desc": e.get("desc", ""), "extra": extra})
+    return out
 
 
 def write_atomic(path, text):
@@ -484,6 +526,8 @@ class Prism:
         self.rules = None
         self.rules_mtime = None
         self.rules_src = None  # the file the rules came from (a folder or pattern resolves to its newest match)
+        self.added = []  # rules the Enhance button added this session: on top of the file's rules, until saved
+        self.lookup, self.lookup_mtime = [], None
         self.verbose = args.verbose
 
     # rules ----------------------------------------------------------------
@@ -510,9 +554,73 @@ class Prism:
             starter = read_rules(STARTER) if STARTER.exists() else None
         except (ValueError, OSError):
             pass
-        boot = {"rules": self.rules, "starter": starter, "enabled": self.enabled, "ui": not self.args.no_ui,
+        boot = {"rules": self.merged_rules(), "starter": starter, "enhance": bool(self.lookup), "enabled": self.enabled, "ui": not self.args.no_ui,
                 "contextChars": self.args.context, "copy": not self.args.no_copy, "match": not self.args.no_match, "saveTo": self.save_target().name, "notice": notice}
         return f"globalThis.__PRISM_BOOT__ = {json.dumps(boot)};\n{self.engine}"
+
+    def merged_rules(self):
+        """The rules every tab gets: what Enhance added this session, first (so it wins where it overlaps), then the
+        rules file's."""
+        if not self.added:
+            return self.rules
+        data = json.loads(self.rules) if self.rules else {"name": "", "rules": []}
+        data["rules"] = self.added + data["rules"]
+        return json.dumps(data)
+
+    # Enhance: look a hit up and add a rule for it ------------------------------
+    def load_lookup(self, quiet=False):
+        if not self.args.lookup:
+            return
+        p = Path(os.path.expanduser(self.args.lookup))
+        self.lookup_mtime = p.stat().st_mtime
+        self.lookup = read_lookup(p, warn=log)
+        if not quiet:
+            log(f"lookup: {len(self.lookup)} network{'s' if len(self.lookup) != 1 else ''} from {p}")
+
+    def lookup_indicator(self, text):
+        """A rule for this hit, from the most specific lookup network it falls in, or None."""
+        raw = text.strip().strip("[]")
+        try:
+            ip = ipaddress.ip_address(raw.replace("[.]", ".").replace("[:]", ":").split("%")[0])
+        except ValueError:
+            return None
+        hits = [e for e in self.lookup if ip.version == e["net"].version and ip in e["net"]]
+        if not hits:
+            return None
+        e = max(hits, key=lambda x: x["net"].prefixlen)  # a /24 inside a /16 is the better answer
+        rule = {"name": e["name"], "pattern": r"(?<![\w.:])" + re.escape(text.strip()) + r"(?![\w:]|\.\d)",
+                "flags": "", "style": e["style"] or "fill", "on": True,
+                "desc": "; ".join(x for x in (e["desc"], f"in {e['net']}") if x), "extra": dict(e["extra"])}
+        if e["color"]:
+            rule["color"] = e["color"]
+        return rule
+
+    async def tell(self, sid, cid, text, bad=False):
+        try:
+            await self.cdp.send("Runtime.evaluate", {"expression": f"globalThis.prismHL && prismHL.notice("
+                                f"{json.dumps(text)}, {'true' if bad else 'false'})", "contextId": cid}, sid)
+        except (CDPError, asyncio.TimeoutError):
+            pass
+
+    async def enhance_from_page(self, sid, cid, payload):
+        try:
+            req = json.loads(payload) if len(payload) < 10_000 else {}
+            text = str(req.get("match", ""))[:200]
+        except ValueError:
+            return
+        rule = self.lookup_indicator(text)
+        if not rule:
+            log(f"enhance: {text!r} isn't in any lookup network")
+            await self.tell(sid, cid, "Not in the lookup", bad=True)
+            return
+        existing = self.added + (json.loads(self.rules)["rules"] if self.rules else [])
+        if any(r.get("pattern") == rule["pattern"] for r in existing):
+            await self.tell(sid, cid, "Already has a rule")
+            return
+        self.added.insert(0, json.loads(normalize([rule]))["rules"][0])
+        log(f"enhance: {text} -> {rule['name']} ({rule['desc']}); {len(self.added)} added this session, "
+            f"Save in the editor keeps them")
+        await self.push_rules(notice=f"Added: {rule['name']}")
 
     # saving edits from the page -------------------------------------------
     def save_target(self):
@@ -530,9 +638,11 @@ class Prism:
         return cwd / "rules.prism.json"
 
     def on_binding(self, p, sid):
-        if p.get("name") != SAVE_BINDING or (sid, p.get("executionContextId")) not in self.contexts:
+        if (sid, p.get("executionContextId")) not in self.contexts:  # only Prism's own world, never the page
             return
-        asyncio.ensure_future(self.save_from_page(sid, p["executionContextId"], p.get("payload") or ""))
+        handler = {SAVE_BINDING: self.save_from_page, ENHANCE_BINDING: self.enhance_from_page}.get(p.get("name"))
+        if handler:
+            asyncio.ensure_future(handler(sid, p["executionContextId"], p.get("payload") or ""))
 
     async def save_from_page(self, sid, cid, payload):
         target = self.save_target()
@@ -553,6 +663,7 @@ class Prism:
                 pass
             return
         moved = target != self.rules_src
+        self.added = []  # the editor showed them, so whatever was kept is in the file now
         self.args.rules = str(target)
         self.load_rules_file()  # read back what was written, so every tab gets exactly what's on disk
         log(f"saved {len(data['rules'])} rules to {target}" + (" (now the rules file)" if moved else ""))
@@ -581,7 +692,8 @@ class Prism:
     async def setup(self, sid, ti, waiting):
         try:
             await self.cdp.send("Runtime.enable", session=sid)
-            await self.cdp.send("Runtime.addBinding", {"name": SAVE_BINDING, "executionContextName": WORLD}, sid)
+            for name in (SAVE_BINDING, ENHANCE_BINDING):
+                await self.cdp.send("Runtime.addBinding", {"name": name, "executionContextName": WORLD}, sid)
             await self.cdp.send("Page.enable", session=sid)
             # Cross-origin iframes run in their own process: attach to those too, as they appear. Workers are
             # attached only so they can be released at once (waitForDebuggerOnStart would otherwise hold them)
@@ -709,7 +821,7 @@ class Prism:
         frames = [v for *_, v in rows if v and not v.get("top")]
         log(f"{len(self.sessions)} targets, {len(tops)} tabs, {len(frames)} frames with Prism, rules: "
             f"{('Prism link' if is_link(self.args.rules) else self.rules_src or self.args.rules) or 'none'}, "
-            f"{'on' if self.enabled else 'off'}")
+            f"{'on' if self.enabled else 'off'}" + (f", {len(self.added)} added by Enhance (not saved)" if self.added else ""))
         for v in tops:
             print(f"  {v['hits']:>6} hits  {v['rules']} rules  {'on ' if v['on'] else 'off'}  {v['url'][:100]}")
             for p in v.get("paused") or []:
@@ -717,10 +829,26 @@ class Prism:
         if frames:
             print(f"  {sum(f['hits'] for f in frames):>6} hits in {len(frames)} embedded frames")
 
+    async def watch_lookup(self):
+        if not self.args.lookup:
+            return
+        try:
+            if Path(os.path.expanduser(self.args.lookup)).stat().st_mtime == self.lookup_mtime:
+                return
+            had = bool(self.lookup)
+            self.load_lookup()
+            if had != bool(self.lookup):
+                await self.push_rules()  # the Enhance button appears or goes away
+        except (ValueError, OSError) as e:
+            log(f"{self.args.lookup}: not reloaded, {e}")
+            self.lookup_mtime = None if not Path(os.path.expanduser(self.args.lookup)).exists() else \
+                Path(os.path.expanduser(self.args.lookup)).stat().st_mtime
+
     async def watch_rules(self):
         """Reload when the rules file changes, or when a newer one lands in the folder or pattern --rules names."""
         while True:
             await asyncio.sleep(1)
+            await self.watch_lookup()
             spec = self.args.rules
             if not spec or is_link(spec):
                 continue
@@ -761,6 +889,8 @@ HELP = """commands:
   reload         re-read the rules file now (it also reloads by itself when the file changes)
   rules <path>   switch to another rules file (CSV, TSV, .prism.json or a Prism rule link)
   starter        switch to starter.csv
+  added          rules the Enhance button added this session (Save in a tab's rules editor keeps them)
+  added clear    remove them from every tab
   open <url>     open a new tab
   quit           remove Prism from every page and exit (closes the browser if Prism launched it)"""
 
@@ -834,6 +964,8 @@ async def main():
                     help="extra browser command-line switch, e.g. --browser-arg=--start-maximized (repeatable)")
     ap.add_argument("--headless", action="store_true", help="run the launched browser headless (testing)")
     ap.add_argument("--no-ui", action="store_true", help="no floating Prism control in pages")
+    ap.add_argument("--lookup", metavar="FILE", help="networks for the hover card's Enhance button: a CSV/TSV with "
+                                                    "cidr,name,color,desc (and any extra columns); reloaded when it changes")
     ap.add_argument("--no-copy", action="store_true", help="no Copy match / Copy context buttons on the hover card")
     ap.add_argument("--no-match", action="store_true", help="don't repeat the matched text on the hover card "
                                                            "(capture groups still show)")
@@ -937,6 +1069,10 @@ async def main():
             sys.exit(f"{args.rules}: {e}")
     except (ValueError, OSError) as e:
         sys.exit(f"{args.rules}: {e}")
+    try:
+        prism.load_lookup()
+    except (ValueError, OSError) as e:
+        sys.exit(f"{args.lookup}: {e}")
     await prism.start()
     for u in args.urls:
         await cdp.send("Target.createTarget", {"url": u})
@@ -989,6 +1125,16 @@ async def main():
                     used = prism.load_rules_file()
                     log("rules:", "Prism link" if used is None else used)
                     await prism.push_rules()
+                elif cmd == "added":
+                    if rest.strip() == "clear":
+                        n = len(prism.added); prism.added = []
+                        await prism.push_rules()
+                        log(f"removed {n} added rule{'s' if n != 1 else ''}")
+                    elif not prism.added:
+                        log("nothing added this session" + ("" if prism.lookup else " (no --lookup file loaded)"))
+                    else:
+                        for r in prism.added:
+                            print(f"  {r['name']:24} {r['pattern']}   {r.get('desc', '')}")
                 elif cmd == "open" and rest:
                     await cdp.send("Target.createTarget", {"url": rest.strip()})
                 elif cmd:

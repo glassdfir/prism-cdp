@@ -9,7 +9,7 @@
  * - Makes no network requests and saves nothing. Rules come from the controller and live in memory only.
  *
  * globalThis.__PRISM_BOOT__ (set by the controller just before this file):
- *   { rules, starter, enabled, ui, copy (false = no copy buttons), match (false = no matched text), contextChars (0 = no context on the hover card) }  rules and starter are .prism.json text the controller built from files
+ *   { rules, starter, enabled, ui, enhance (a lookup is loaded), copy (false = no copy buttons), match (false = no matched text), contextChars (0 = no context on the hover card) }  rules and starter are .prism.json text the controller built from files
  * Source: https://jon.glass/prism/ · MIT © 2026 Jon Glass
  */
 // The run's promise, so the controller can wait for rules to be checked and running before it reports back
@@ -22,6 +22,10 @@ globalThis.__PRISM_READY__ = (async () => {
   const CONTEXT_CHARS = Math.max(0, Number(BOOT.contextChars) || 0);
   const COPY = BOOT.copy !== false;  // the hover card's copy buttons; --no-copy turns them off
   const SHOW_MATCH = BOOT.match !== false;  // the matched text on the hover card; --no-match turns it off
+  // Enhance: when the controller has a --lookup file, hits that are IP addresses get a button that asks it to
+  // look the address up and add a rule for it (name, color and notes from the network it belongs to)
+  const canEnhance = () => BOOT.enhance === true && typeof globalThis.__prismEnhance === 'function';
+  const looksLikeIp = (t) => /^\[?(?:\d{1,3}(?:\.|\[\.\])){3}\d{1,3}\]?$/.test(t.trim()) || /^\[?(?=[0-9a-f:.]*::|(?:[0-9a-f]{1,4}:){7})[0-9a-f:.]+\]?$/i.test(t.trim());  // IPv6 needs :: or all 8 groups
   // Web pages and local files only: leave edge://, about:, devtools and extension pages alone
   if (!/^(https?|file):$/.test(location.protocol)) return;
   let TOP = true; try { TOP = window.top === window; } catch (e) { TOP = false; }
@@ -260,8 +264,10 @@ globalThis.__PRISM_READY__ = (async () => {
   function render(node, list) {
     const byId = new Map(rules.map((r) => [r.id, r]));
     list = list.slice().sort((x, y) => byId.get(y.rid).prio - byId.get(x.rid).prio).slice(0, 4);
+    let enhOffered = false;  // one Enhance button per card: the overlapping entries share the same address
     setHTML(card, list.map((h, i) => {
       const r = byId.get(h.rid), cx = ctxChars > 0 ? context(node, h) : null, [R, G, B] = rgb(r.color);
+      const enh = !enhOffered && canEnhance() && looksLikeIp(node.data.slice(h.s, h.e)) && (enhOffered = true);
       let groups = '';
       if (h.g) {
         const rows = [], named = h.g.n ? Object.entries(h.g.n).filter(([, v]) => v != null) : [], vals = named.map(([, v]) => v);
@@ -274,7 +280,7 @@ globalThis.__PRISM_READY__ = (async () => {
         ${notes(r) ? `<div class="desc">${esc(notes(r))}</div>` : ''}
         ${SHOW_MATCH ? `<div class="val mono">${esc(node.data.slice(h.s, h.e))}</div>` : ''}${groups}
         ${cx ? `<div class="ctx mono">${esc(cx.before)}<mark data-bg="rgba(${R},${G},${B},.4)">${esc(cx.match)}</mark>${esc(cx.after)}</div>` : ''}
-        ${COPY ? `<div class="act"><button data-copy="val">Copy match</button>${cx ? '<button data-copy="ctx">Copy context</button>' : ''}${i === 0 ? '<span class="brand">Prism</span>' : ''}</div>` : ''}
+        ${COPY || enh ? `<div class="act">${COPY ? `<button data-copy="val">Copy match</button>${cx ? '<button data-copy="ctx">Copy context</button>' : ''}` : ''}${enh ? '<button data-enhance="1" title="Look this address up and add a rule for it">Enhance</button>' : ''}${i === 0 ? '<span class="brand">Prism</span>' : ''}</div>` : ''}
       </div>`;
     }).join(''));
     card.querySelectorAll('[data-bg]').forEach((e) => { e.style.background = e.dataset.bg; }); // CSSOM: allowed under a strict CSP
@@ -292,6 +298,12 @@ globalThis.__PRISM_READY__ = (async () => {
   shadow.addEventListener('click', async (e) => {
     const b = e.target.closest('button'); if (!b || !card._data) return;
     const { node, list } = card._data, h = list[+b.closest('.hit').dataset.i];
+    if (b.dataset.enhance) {
+      if (!canEnhance()) return;
+      b.disabled = true; b.textContent = 'Looking up…';
+      globalThis.__prismEnhance(JSON.stringify({ match: node.data.slice(h.s, h.e) }));  // the controller answers with a notice
+      return;
+    }
     const cx = b.dataset.copy === 'ctx' ? context(node, h) : null;
     const text = !cx ? node.data.slice(h.s, h.e) : cx.before.replace(/^…/, '') + cx.match + cx.after.replace(/…$/, '');
     try { await navigator.clipboard.writeText(text); b.textContent = 'Copied'; } catch (err) { b.textContent = 'Copy blocked'; }

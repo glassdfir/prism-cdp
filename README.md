@@ -54,6 +54,26 @@ Click **Rules** on the Prism control in any tab for the rules editor. Each rule 
 
 Saving goes through a channel that only exists in Prism's isolated world, so the page's own scripts can't call it or see your rules, and the controller decides which file is written.
 
+### Enhance: look an address up
+
+Give Prism CDP a table of your networks and every IP address it highlights gets an **Enhance** button on its hover card:
+
+```sh
+python3 prism_cdp.py --rules my-signatures.csv --lookup examples/subnets.csv
+```
+
+```csv
+cidr,name,color,desc,owner
+10.0.0.0/16,Corporate LAN,#94a3b8,All internal ranges,IT
+10.0.1.0/24,Finance VLAN,#f2a93b,Finance workstations,Finance
+```
+
+Click **Enhance** on `10.0.1.21` and Prism CDP looks it up in Python, finds the most specific network it belongs to (the /24, not the /16), and adds a rule for that exact address to every tab: the network's name and color, its notes, and any extra columns (`owner` here) on the hover card. The new rule sits above your others, so its color wins.
+
+- Defanged addresses (`10.0.1[.]21`) and IPv6 networks work too. Addresses in none of the networks get a "Not in the lookup" notice.
+- Added rules last for the session and survive reloads of your rules file. They show in the rules editor, so **Save** writes them to your file if you want to keep them. `added` in the terminal lists them, and `added clear` removes them.
+- The lookup file reloads when it changes, like the rules file.
+
 ### Build them in Prism
 
 The [Prism](https://jon.glass/prism/) web app is a good place to write rules: paste a sample of the page or log you care about, and you see every match and every capture group as you type the pattern. Prism CDP reads what Prism saves, as it is:
@@ -110,10 +130,11 @@ Type these at the `prism_cdp.py` prompt:
 | `reload` | Re-read the rules file now |
 | `rules <path>` | Switch to another rules file |
 | `starter` | Switch to `starter.csv` |
+| `added` / `added clear` | List, or remove, the rules Enhance added this session |
 | `open <url>` | Open a new tab |
 | `quit` (or Ctrl+C, or Ctrl+Break on Windows) | Remove Prism from every page and exit. Closes the browser if Prism launched it, unless `--keep-open`. |
 
-Each tab also gets the floating **Prism** control (bottom right): **Rules** opens the editor, **Off** turns highlighting off in that tab, and **✕** removes Prism from it until the tab reloads. `--no-ui` hides that control. Other options: `--off` (start with highlighting off), `--no-copy` (no copy buttons on the hover card), `--no-match` (don't repeat the matched text on the hover card; capture groups still show), `--context [N]` (also show the text around each hit on the hover card, N characters each side, 100 if you leave N out; it's off by default because on a live page that text is already on screen), `--browser PATH` or `PRISM_BROWSER` (another Chromium browser), `--browser-arg ARG`, `--profile DIR`, `-v`.
+Each tab also gets the floating **Prism** control (bottom right): **Rules** opens the editor, **Off** turns highlighting off in that tab, and **✕** removes Prism from it until the tab reloads. `--no-ui` hides that control. Other options: `--off` (start with highlighting off), `--no-copy` (no copy buttons on the hover card), `--no-match` (don't repeat the matched text on the hover card; capture groups still show), `--lookup FILE` (networks for the Enhance button), `--context [N]` (also show the text around each hit on the hover card, N characters each side, 100 if you leave N out; it's off by default because on a live page that text is already on screen), `--browser PATH` or `PRISM_BROWSER` (another Chromium browser), `--browser-arg ARG`, `--profile DIR`, `-v`.
 
 ## How it stays out of the way
 
@@ -135,6 +156,7 @@ Each tab also gets the floating **Prism** control (bottom right): **Rules** open
 
 - `prism_cdp.py` is the controller: launching and attaching, the pipe and WebSocket transports, tab and frame tracking, and live rule reloads.
 - `examples/case01.prism.json` holds the rules from the screenshot, for [Case 01](https://jon.glass/cases/arclight/): `python3 prism_cdp.py --rules examples/case01.prism.json https://jon.glass/cases/arclight/`. It's a Prism rule file, so it also opens in the Prism web app (**Sets → Load rules from a file…**) if you want to edit it there.
+- `examples/subnets.csv` is an example `--lookup` table for the Enhance button.
 - `starter.csv` holds starter DFIR signatures (tooling, URLs, IPs, hashes, paths, registry keys and more). It's also offered by the **Starter rules** button in each tab, and it's a working example of the CSV format.
 - `engine.js` is the highlighter injected into every page, adapted from Prism's.
 
