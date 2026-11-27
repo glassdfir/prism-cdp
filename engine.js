@@ -154,12 +154,43 @@ globalThis.__PRISM_READY__ = (async () => {
   }
 
   // ---------- Hover card (in a closed shadow root, outside the page's own tree) ----------
+  // Prism's markup is built element by element, never through innerHTML. Sites that enforce Trusted Types
+  // (Teams, Outlook and the rest of Microsoft 365) block every HTML-string API in this world too, and the engine
+  // would fail before highlighting anything. Only Prism's own templates come through here; every value taken
+  // from the page or a rule is escaped with esc() first.
+  const VOID = new Set(['input', 'br', 'img', 'hr', 'col', 'wbr']);
+  const ENT = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: '\u00a0' };
+  const unent = (t) => t.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (m, e) => e[0] !== '#' ? (ENT[e.toLowerCase()] ?? m)
+    : String.fromCodePoint(e[1] === 'x' || e[1] === 'X' ? parseInt(e.slice(2), 16) : +e.slice(1)));
+  function build(html) {
+    const frag = document.createDocumentFragment(), stack = [];
+    const tags = /<(\/?)([a-zA-Z][\w-]*)((?:\s+[^\s=>\/]+(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+))?)*)\s*(\/?)>|<!--[\s\S]*?-->|([^<]+|<)/g;
+    const attrs = /([^\s=>\/]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+)))?/g;
+    let m, cur = frag;
+    while ((m = tags.exec(html))) {
+      if (m[5] !== undefined) { cur.append(unent(m[5])); continue; }
+      if (!m[2]) continue;  // a comment
+      const tag = m[2].toLowerCase();
+      if (m[1]) {  // a closing tag: back out to the matching element
+        while (stack.length && stack.pop().localName !== tag);
+        cur = stack.length ? stack[stack.length - 1] : frag;
+        continue;
+      }
+      const el = document.createElement(tag);
+      let a; attrs.lastIndex = 0;
+      while ((a = attrs.exec(m[3]))) if (!/^on/i.test(a[1])) el.setAttribute(a[1], unent(a[2] ?? a[3] ?? a[4] ?? ''));
+      cur.append(el);
+      if (!VOID.has(tag) && !m[4]) { stack.push(el); cur = el; }
+    }
+    return frag;
+  }
+  const setHTML = (el, html) => el.replaceChildren(build(html));
   // Shadow-root styles go in constructed sheets: a page's CSP can block <style> tags, but not these
   function styled(root, html) {
     const m = /^<style>([\s\S]*?)<\/style>/.exec(html);
     const sh = new CSSStyleSheet(); sh.replaceSync(m[1]);
     root.adoptedStyleSheets = [sh];
-    root.innerHTML = html.slice(m[0].length);
+    setHTML(root, html.slice(m[0].length));
   }
   const host = document.createElement('div');
   host.setAttribute('data-prism-tip', '');
@@ -212,7 +243,7 @@ globalThis.__PRISM_READY__ = (async () => {
   function render(node, list) {
     const byId = new Map(rules.map((r) => [r.id, r]));
     list = list.slice().sort((x, y) => byId.get(y.rid).prio - byId.get(x.rid).prio).slice(0, 4);
-    card.innerHTML = list.map((h, i) => {
+    setHTML(card, list.map((h, i) => {
       const r = byId.get(h.rid), cx = ctxChars > 0 ? context(node, h) : null, [R, G, B] = rgb(r.color);
       let groups = '';
       if (h.g) {
@@ -228,7 +259,7 @@ globalThis.__PRISM_READY__ = (async () => {
         ${cx ? `<div class="ctx mono">${esc(cx.before)}<mark data-bg="rgba(${R},${G},${B},.4)">${esc(cx.match)}</mark>${esc(cx.after)}</div>` : ''}
         <div class="act"><button data-copy="val">Copy match</button>${cx ? '<button data-copy="ctx">Copy context</button>' : ''}${i === 0 ? '<span class="brand">Prism</span>' : ''}</div>
       </div>`;
-    }).join('');
+    }).join(''));
     card.querySelectorAll('[data-bg]').forEach((e) => { e.style.background = e.dataset.bg; }); // CSSOM: allowed under a strict CSP
     card._data = { node, list };
   }
@@ -451,7 +482,7 @@ globalThis.__PRISM_READY__ = (async () => {
   function drawEditor() {
     const counts = hitCounts(), keys = extraKeys();
     $p('sum').textContent = draft.length ? `${draft.length} rule${draft.length === 1 ? '' : 's'}${setName ? ` · ${setName}` : ''}` : '';
-    $p('list').innerHTML = draft.length ? draft.map((r, i) => {
+    setHTML($p('list'), draft.length ? draft.map((r, i) => {
       const n = counts.get(r.id), bad = problem(r);
       return `<div class="rule${r.on ? '' : ' off'}${bad ? ' bad' : ''}" data-i="${i}">
         <div class="r1"><input type="checkbox" data-f="on" ${r.on ? 'checked' : ''} title="Run this rule">
@@ -467,7 +498,7 @@ globalThis.__PRISM_READY__ = (async () => {
         ${keys.length ? `<div class="x">${keys.map((k) => `<label>${esc(k)} <input data-x="${esc(k)}" value="${esc((r.extra || {})[k] || '')}" spellcheck="false"></label>`).join('')}</div>` : ''}
         <div class="err" data-err>${esc(bad)}</div>${!bad && r.paused && r.id ? `<div class="warn">Not running: ${esc(r.paused.replace(/^paused: /, ''))}</div>` : ''}
       </div>`;
-    }).join('') : '<div class="empty">No rules yet. Add one, paste a Prism link, or start from the starter rules.</div>';
+    }).join('') : '<div class="empty">No rules yet. Add one, paste a Prism link, or start from the starter rules.</div>');
     validate();
   }
   function validate() {
@@ -556,4 +587,4 @@ globalThis.__PRISM_READY__ = (async () => {
     catch (e) { console.warn('[Prism] Rules from the controller:', e.message); }
   } else panelCount(0);
   if (BOOT.notice && SHOW_UI) notice(BOOT.notice);
-})();
+})().catch((e) => console.warn('[Prism] Could not start on this page: ' + (e && e.message || e)));
