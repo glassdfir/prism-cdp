@@ -74,6 +74,7 @@ DEFAULT_PORT = 61455  # used by a bare --port or --attach, and on Windows
 PROFILES = Path.home() / ".prism-cdp"  # one profile folder per browser: edge-profile, chrome-profile
 # Start the browser in its own process group, so Ctrl+C in this terminal reaches only the controller
 # (which then shuts down cleanly) and a --keep-open browser survives it
+LAUNCHED = []  # browsers this run started, closed if the controller crashes (so the next run's port is free)
 DETACHED = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if IS_WIN else {"start_new_session": True}
 
 
@@ -316,6 +317,7 @@ class PipeTransport:
         # Every other fd Python opens is non-inheritable, so only 0-4 reach the browser
         self.proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                      stderr=subprocess.DEVNULL, preexec_fn=child, close_fds=False, **DETACHED)
+        LAUNCHED.append(self.proc)
         os.close(to_child)
         os.close(from_child)
         rd = os.fdopen(c, "rb", buffering=0)
@@ -474,7 +476,7 @@ class Prism:
     def __init__(self, cdp, args):
         self.cdp = cdp
         self.args = args
-        self.engine = ENGINE.read_text()
+        self.engine = ENGINE.read_text(encoding="utf-8")  # explicit: Windows' default is the legacy code page
         self.sessions = {}  # sessionId -> {"target": targetInfo, "script": identifier}
         self.targets = set()
         self.contexts = {}  # (sessionId, contextId) -> frameId
@@ -883,13 +885,15 @@ async def main():
                 pass
             proc = subprocess.Popen(cmd + [f"--remote-debugging-port={args.port}"], stdin=subprocess.DEVNULL,
                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **DETACHED)
+            if not args.keep_open:
+                LAUNCHED.append(proc)
             ws, port = None, args.port
             for _ in range(80):
                 await asyncio.sleep(0.25)
                 if proc.poll() is not None:
                     break
                 try:
-                    lines = active.read_text().split()
+                    lines = active.read_text(encoding="utf-8").split()
                     if len(lines) >= 2:
                         port, ws = int(lines[0]), f"ws://127.0.0.1:{lines[0]}{lines[1]}"
                         break
@@ -1027,3 +1031,9 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         pass
+    except BaseException:
+        # A crash must not leave the browser we started running (on Windows it would keep port 61455 busy)
+        for p in LAUNCHED:
+            if p.poll() is None:
+                p.terminate()
+        raise
